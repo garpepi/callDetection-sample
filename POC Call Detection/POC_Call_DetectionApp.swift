@@ -9,9 +9,12 @@ import SwiftUI
 
 @main
 struct POC_Call_DetectionApp: App {
+    @StateObject private var callManager = CallDetectionManager()
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(callManager)
         }
     }
 }
