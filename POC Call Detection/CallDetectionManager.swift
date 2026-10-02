@@ -7,13 +7,19 @@
 
 import CallKit
 import Combine
+import OSLog
+import UIKit
 
 class CallDetectionManager: NSObject, ObservableObject, CXCallObserverDelegate {
     
     // MARK: - Published State
+    /// Whenever a connected or on-hold call is detected, `isCallActive` will be set to `true`.
     @Published var isCallActive: Bool = false
     @Published var callState: CallState = .none
-    private let callObserver = CXCallObserver()
+    
+    static let shared = CallDetectionManager()
+    private var callObserver: CXCallObserver?
+    private var cancellables: Set<AnyCancellable> = []
     
     // MARK: - Call State Enum
     enum CallState {
@@ -50,12 +56,67 @@ class CallDetectionManager: NSObject, ObservableObject, CXCallObserverDelegate {
     // MARK: - Init
     override init() {
         super.init()
-        callObserver.setDelegate(self, queue: .main)
+        observeCallStateChanges()
+        observeAppLifecycle()
+    }
+    
+    /// Initializes the call observer and evaluates any active calls at launch.
+    /// Sets up a `CXCallObserver` delegate to monitor ongoing call state changes.
+    /// If a call is already in progress when the app starts, updates
+    /// `isCallActive` accordingly, and presents a blocking page informing the user
+    /// that the app can't be used if a connected or on-hold call is detected.
+    func start() {
+        Logger.callDetectionManager.info("Call Detection Manager started")
+        if callObserver == nil {
+            let observer = CXCallObserver()
+            observer.setDelegate(self, queue: .main)
+            callObserver = observer
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            Logger.callDetectionManager.info("Detecting any existing call at launch")
+            self?.reconcileCallState()
+        }
+    }
+    
+    private func reconcileCallState() {
+        let calls = callObserver?.calls ?? []
+        let hasActiveCall = calls.contains { ($0.hasConnected || $0.isOnHold) && !$0.hasEnded }
+        Logger.callDetectionManager.info("Reconciling call state. isCallActive : \(hasActiveCall)")
+        isCallActive = hasActiveCall
+    }
+    
+    private func observeCallStateChanges() {
+        $isCallActive
+            .receive(on: DispatchQueue.main)
+            .sink(receiveValue: { [weak self] isActive in
+                guard let self else { return }
+                if isActive {
+                    // showCallDetectionView()
+                } else {
+                    // removeCallDetectionView()
+                }
+            })
+            .store(in: &cancellables)
+    }
+    
+    private func observeAppLifecycle() {
+        NotificationCenter.default
+            .publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                reconcileCallState()
+                if !isCallActive {
+                    // removeCallDetectionView()
+                }
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - CXCallObserverDelegate
     func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
         updateCallState(from: call)
+        reconcileCallState()
     }
     
     private func updateCallState(from call: CXCall) {
